@@ -1,0 +1,11 @@
+# 后端
+backend/.env
+backend/__pycache__/
+backend/*.pyc
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# 系统
+.DS_Store
