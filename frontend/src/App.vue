@@ -8,9 +8,28 @@
           <p class="subtitle">上传刻本图片（可多张）或PDF · 自动识别 · 逐字校对</p>
         </div>
       </div>
-      <span class="stage-tag">MVP · 第一阶段</span>
+      <div class="topbar-right">
+        <span class="stage-tag">MVP · 第一阶段</span>
+        <nav class="top-nav">
+          <button
+            class="nav-link"
+            :class="{ active: currentView === 'main' }"
+            @click="currentView = 'main'"
+          >
+            识别工具
+          </button>
+          <button
+            class="nav-link"
+            :class="{ active: currentView === 'about' }"
+            @click="currentView = 'about'"
+          >
+            关于
+          </button>
+        </nav>
+      </div>
     </header>
 
+    <template v-if="currentView === 'main'">
     <section class="toolbar">
       <label class="btn btn-ghost">
         选择图片 / PDF
@@ -167,6 +186,57 @@
       <span class="seal seal-big">弾</span>
       <p>请选择一张或多张弹词刻本图片，或者一份PDF开始</p>
     </section>
+    </template>
+
+    <template v-else>
+      <section class="about-page">
+        <div class="about-section">
+          <h2>关于这个项目</h2>
+          <p>
+            「弹词文字识别助手」是一个用来辅助识别、校对弹词刻本文字的小工具，目标是让整理古籍刻本文字
+            这件事更省力一点——上传一张刻本图片或PDF，自动识别出文字，再逐字跟原图对照校对，减少纯手工
+            抄录的工作量。目前还是第一阶段的MVP（最小可行产品），功能和识别准确率都还在持续完善中。
+          </p>
+        </div>
+
+        <div class="about-section">
+          <h2>开发者</h2>
+          <p>本项目由 <strong>[你的名字/昵称]</strong> 独立开发和维护。</p>
+        </div>
+
+        <div class="about-section">
+          <h2>用到的第三方服务和开源库</h2>
+          <ul class="about-list">
+            <li>文字识别：百度智能云「通用文字识别（高精度版）」</li>
+            <li>翻译：百度翻译开放平台「通用文本翻译API」</li>
+            <li>PDF转图片：PyMuPDF（<a href="https://pymupdf.readthedocs.io/" target="_blank" rel="noopener">AGPL开源协议</a>）</li>
+            <li>繁简转换：opencc-js（开源库）</li>
+          </ul>
+          <p class="about-note">
+            以上服务/库各自遵循其自身的条款和开源协议，与本项目本身的版权分开。其中PDF处理用到的PyMuPDF
+            采用AGPL协议，该协议要求：只要用户是通过网络在使用这个功能（比如访问这个网站），就需要能够
+            获取到完整的源代码，因此这里附上本项目的
+            <a href="https://github.com/jiachenc256-sys/Talcne" target="_blank" rel="noopener">GitHub源码仓库</a>。
+          </p>
+        </div>
+
+        <div class="about-section">
+          <h2>隐私说明</h2>
+          <p>
+            上传的图片或PDF会被发送到百度的服务器，用于文字识别和翻译处理；本项目自身的服务器不会保存
+            你上传的文件，识别结果也只保留在你当前浏览器的这次会话里，刷新页面就会清空。
+          </p>
+        </div>
+
+        <div class="about-section">
+          <h2>版权</h2>
+          <p class="about-note">
+            © 2026 弹词文字识别助手。除上方列出的第三方服务和开源库外，本项目代码保留所有权利
+            （All rights reserved），未经许可不得复制、修改或用于其他用途。
+          </p>
+        </div>
+      </section>
+    </template>
   </div>
 </template>
 
@@ -189,6 +259,7 @@ export default {
   name: 'App',
   data() {
     return {
+      currentView: 'main', // 'main' | 'about'
       selectedFiles: [], // 用户选中的文件列表：要么是1个PDF，要么是1张及以上图片
       singlePreviewUrl: null, // 只选了1张图片时，识别前可以直接本地预览用这个
       // pages: 识别结果按页存储。PDF模式下每页是PDF的一页；多图模式下每页对应一张上传的图片。
@@ -491,6 +562,12 @@ body {
   color: var(--ink-soft);
 }
 
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .stage-tag {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -499,6 +576,33 @@ body {
   padding: 4px 10px;
   border-radius: 999px;
   white-space: nowrap;
+}
+
+.top-nav {
+  display: flex;
+  gap: 4px;
+}
+
+.nav-link {
+  font-family: var(--font-body);
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.nav-link:hover {
+  color: var(--seal);
+}
+
+.nav-link.active {
+  background: var(--paper-light);
+  border-color: var(--line-strong);
+  color: var(--seal);
+  font-weight: 600;
 }
 
 /* ---------- 工具栏 ---------- */
@@ -812,6 +916,48 @@ body {
 .edit-area:focus-visible {
   outline: 2px solid var(--seal);
   outline-offset: 1px;
+}
+
+/* ---------- 关于页面 ---------- */
+.about-page {
+  max-width: 720px;
+}
+
+.about-section {
+  margin-bottom: 32px;
+}
+
+.about-section h2 {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--line-strong);
+}
+
+.about-section p {
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+
+.about-list {
+  font-size: 14px;
+  line-height: 2;
+  color: var(--ink);
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.about-list a {
+  color: var(--seal);
+}
+
+.about-note {
+  font-size: 12px;
+  color: var(--ink-soft);
 }
 
 /* ---------- 空状态 ---------- */
