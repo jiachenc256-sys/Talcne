@@ -5,7 +5,7 @@
         <span class="seal">弾</span>
         <div class="brand-text">
           <h1>弹词文字识别助手</h1>
-          <p class="subtitle">上传刻本图片 · 自动识别 · 逐字校对</p>
+          <p class="subtitle">上传刻本图片（可多张）或PDF · 自动识别 · 逐字校对</p>
         </div>
       </div>
       <span class="stage-tag">MVP · 第一阶段</span>
@@ -13,86 +13,135 @@
 
     <section class="toolbar">
       <label class="btn btn-ghost">
-        选择图片
-        <input type="file" accept="image/*" hidden @change="handleFileUpload" />
+        选择图片 / PDF
+        <input
+          type="file"
+          accept="image/*,application/pdf"
+          multiple
+          hidden
+          @change="handleInitialSelect"
+        />
+      </label>
+      <label v-if="selectedFiles.length && !isPdfMode" class="btn btn-ghost">
+        追加图片
+        <input type="file" accept="image/*" multiple hidden @change="handleAppendImages" />
       </label>
       <button
         class="btn btn-primary"
-        :disabled="!uploadedFile || isProcessing"
+        :disabled="!selectedFiles.length || isProcessing"
         @click="recognizeText"
       >
-        {{ isProcessing ? '识别中…' : '开始识别文字' }}
+        {{ isProcessing ? processingLabel : '开始识别文字' }}
       </button>
-      <span v-if="fileName" class="file-name">{{ fileName }}</span>
       <span v-if="errorMsg" class="error-msg">{{ errorMsg }}</span>
     </section>
 
-    <section v-if="imageUrl" class="workspace">
-      <div class="panel image-panel">
-        <p class="panel-label">刻本原图</p>
-        <div class="image-wrapper" ref="wrapperRef">
-          <img
-            ref="imgRef"
-            class="source-image"
-            :src="imageUrl"
-            alt="弹词刻本原图"
-            @load="onImageLoad"
-          />
-          <div
-            v-for="(block, idx) in blocks"
-            :key="'box-' + idx"
-            class="overlay-box"
-            :class="{ active: hoverIndex === idx, low: block.confidence < 0.9 }"
-            :style="overlayStyle(block)"
-            @mouseenter="hoverIndex = idx"
-            @mouseleave="hoverIndex = null"
-          ></div>
-        </div>
+    <div v-if="selectedFiles.length && !pages.length" class="file-chips">
+      <span v-for="(f, idx) in selectedFiles" :key="'file-' + idx" class="file-chip">
+        {{ f.name }}
+        <button class="chip-remove" title="移除这个文件" @click="removeFile(idx)">×</button>
+      </span>
+    </div>
+
+    <section v-if="selectedFiles.length" class="workspace-wrap">
+      <div v-if="pages.length > 1" class="page-tabs">
+        <button
+          v-for="(p, idx) in pages"
+          :key="'page-' + idx"
+          class="page-tab"
+          :class="{ active: idx === currentPageIndex }"
+          @click="switchPage(idx)"
+        >
+          第{{ p.page }}页
+        </button>
       </div>
 
-      <div class="spine"></div>
-
-      <div class="panel text-panel">
-        <p class="panel-label">
-          识别结果
-          <span class="hint">
-            <i class="dot dot-low"></i>置信度较低，建议重点校对
-          </span>
-        </p>
-
-        <div v-if="blocks.length" class="result-actions">
-          <button class="btn btn-ghost btn-small" @click="toggleSimplified">
-            {{ isSimplified ? '转换为繁体' : '转换为简体' }}
-          </button>
+      <div class="workspace">
+        <div class="panel image-panel">
+          <p class="panel-label">
+            刻本原图
+            <span v-if="pages.length" class="hint">共 {{ pages.length }} 页</span>
+          </p>
+          <div class="image-wrapper" ref="wrapperRef">
+            <img
+              v-if="previewSrc"
+              ref="imgRef"
+              class="source-image"
+              :src="previewSrc"
+              alt="弹词刻本原图"
+              @load="onImageLoad"
+            />
+            <div v-else class="pdf-placeholder">
+              <template v-if="isPdfMode">
+                📄 已选择 PDF：{{ selectedFiles[0] && selectedFiles[0].name }}
+                <br />
+                点击上方「开始识别文字」后，这里会显示每一页的预览
+              </template>
+              <template v-else>
+                🖼️ 已选择 {{ selectedFiles.length }} 张图片
+                <br />
+                点击上方「开始识别文字」后，这里会依次显示每一张的预览
+              </template>
+            </div>
+            <div
+              v-for="(block, idx) in currentBlocks"
+              :key="'box-' + idx"
+              class="overlay-box"
+              :class="{ active: hoverIndex === idx, low: block.confidence < 0.9 }"
+              :style="overlayStyle(block)"
+              @mouseenter="hoverIndex = idx"
+              @mouseleave="hoverIndex = null"
+            ></div>
+          </div>
         </div>
 
-        <div v-if="blocks.length" class="text-blocks">
-          <span
-            v-for="(block, idx) in blocks"
-            :key="'chip-' + idx"
-            class="text-chip"
-            :class="{ active: hoverIndex === idx, low: block.confidence < 0.9 }"
-            :title="`置信度 ${(block.confidence * 100).toFixed(1)}%`"
-            @mouseenter="hoverIndex = idx"
-            @mouseleave="hoverIndex = null"
-            >{{ block.text }}</span
-          >
-        </div>
-        <p v-else class="placeholder">点击上方「开始识别文字」查看结果</p>
+        <div class="spine"></div>
 
-        <p class="panel-label secondary">可编辑全文</p>
-        <textarea
-          class="edit-area"
-          v-model="editableText"
-          placeholder="识别结果将出现在这里，你可以直接修改校对…"
-          rows="10"
-        ></textarea>
+        <div class="panel text-panel">
+          <p class="panel-label">
+            识别结果
+            <span class="hint">
+              <i class="dot dot-low"></i>置信度较低，建议重点校对
+            </span>
+          </p>
+
+          <div v-if="pages.length" class="result-actions">
+            <button class="btn btn-ghost btn-small" @click="toggleSimplified">
+              {{ isSimplified ? '转换为繁体' : '转换为简体' }}
+            </button>
+          </div>
+
+          <div v-if="pages.length" class="text-blocks">
+            <span
+              v-for="(block, idx) in currentBlocks"
+              :key="'chip-' + idx"
+              class="text-chip"
+              :class="{ active: hoverIndex === idx, low: block.confidence < 0.9 }"
+              :title="`置信度 ${(block.confidence * 100).toFixed(1)}%`"
+              @mouseenter="hoverIndex = idx"
+              @mouseleave="hoverIndex = null"
+              >{{ block.text }}</span
+            >
+          </div>
+          <p v-else class="placeholder">点击上方「开始识别文字」查看结果</p>
+
+          <p class="panel-label secondary">
+            可编辑全文
+            <span v-if="pages.length > 1" class="hint">已包含全部 {{ pages.length }} 页，按页码分隔</span>
+          </p>
+          <textarea
+            class="edit-area"
+            v-model="editableText"
+            placeholder="识别结果将出现在这里，你可以直接修改校对…"
+            rows="10"
+          ></textarea>
+        </div>
       </div>
     </section>
 
     <section v-else class="empty-state">
       <span class="seal seal-big">弾</span>
-      <p>请选择一张清晰的弹词刻本图片开始</p>
+      <p>请选择一张或多张弹词刻本图片，或者一份PDF开始</p>
     </section>
   </div>
 </template>
@@ -108,16 +157,23 @@ const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
 const toSimplified = OpenCC.Converter({ from: 't', to: 'cn' })
 const toTraditional = OpenCC.Converter({ from: 'cn', to: 't' })
 
+function isPdfFile(file) {
+  return file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')
+}
+
 export default {
   name: 'App',
   data() {
     return {
-      uploadedFile: null,
-      fileName: '',
-      imageUrl: null,
-      blocks: [],
+      selectedFiles: [], // 用户选中的文件列表：要么是1个PDF，要么是1张及以上图片
+      singlePreviewUrl: null, // 只选了1张图片时，识别前可以直接本地预览用这个
+      // pages: 识别结果按页存储。PDF模式下每页是PDF的一页；多图模式下每页对应一张上传的图片。
+      // 结构: { page, text, blocks, image }
+      pages: [],
+      currentPageIndex: 0,
       editableText: '',
       isProcessing: false,
+      processingLabel: '识别中…',
       errorMsg: '',
       isSimplified: false,
       hoverIndex: null,
@@ -125,17 +181,69 @@ export default {
       displaySize: { width: 0, height: 0 },
     }
   },
+  computed: {
+    isPdfMode() {
+      return this.selectedFiles.length === 1 && isPdfFile(this.selectedFiles[0])
+    },
+    currentBlocks() {
+      const p = this.pages[this.currentPageIndex]
+      return p ? p.blocks : []
+    },
+    previewSrc() {
+      const p = this.pages[this.currentPageIndex]
+      if (p) return p.image
+      return this.singlePreviewUrl
+    },
+  },
   methods: {
-    handleFileUpload(event) {
-      const file = event.target.files[0]
-      if (!file) return
-      this.uploadedFile = file
-      this.fileName = file.name
-      this.imageUrl = URL.createObjectURL(file)
-      this.blocks = []
+    resetResults() {
+      this.pages = []
+      this.currentPageIndex = 0
       this.editableText = ''
       this.errorMsg = ''
       this.isSimplified = false
+    },
+    handleInitialSelect(event) {
+      const files = Array.from(event.target.files || [])
+      event.target.value = '' // 允许重复选中同一批文件也能触发change
+      if (!files.length) return
+
+      this.resetResults()
+
+      if (files.length === 1 && isPdfFile(files[0])) {
+        this.selectedFiles = files
+        this.singlePreviewUrl = null
+        return
+      }
+
+      const images = files.filter((f) => !isPdfFile(f))
+      if (images.length !== files.length) {
+        this.errorMsg = 'PDF请单独上传，不要和图片混选，已自动忽略PDF文件'
+      }
+      this.selectedFiles = images
+      this.singlePreviewUrl = images.length === 1 ? URL.createObjectURL(images[0]) : null
+    },
+    handleAppendImages(event) {
+      const files = Array.from(event.target.files || []).filter((f) => !isPdfFile(f))
+      event.target.value = ''
+      if (!files.length) return
+
+      this.selectedFiles = [...this.selectedFiles, ...files]
+      this.singlePreviewUrl =
+        this.selectedFiles.length === 1 ? URL.createObjectURL(this.selectedFiles[0]) : null
+      // 有新文件加入，之前的识别结果作废，需要重新点一次「开始识别文字」
+      this.resetResults()
+    },
+    removeFile(idx) {
+      this.selectedFiles.splice(idx, 1)
+      this.singlePreviewUrl =
+        this.selectedFiles.length === 1 ? URL.createObjectURL(this.selectedFiles[0]) : null
+      this.resetResults()
+    },
+    switchPage(idx) {
+      this.currentPageIndex = idx
+      this.hoverIndex = null
+      this.$nextTick(this.onImageLoad)
     },
     onImageLoad() {
       const img = this.$refs.imgRef
@@ -159,41 +267,85 @@ export default {
       // 这样切换繁简不会覆盖掉用户已经改过的地方
       const converter = this.isSimplified ? toTraditional : toSimplified
       this.editableText = converter(this.editableText)
-      this.blocks = this.blocks.map((b) => ({ ...b, text: converter(b.text) }))
+      this.pages = this.pages.map((p) => ({
+        ...p,
+        text: converter(p.text),
+        blocks: p.blocks.map((b) => ({ ...b, text: converter(b.text) })),
+      }))
       this.isSimplified = !this.isSimplified
     },
+    async callOcrApi(file) {
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await fetch(`${API_BASE}/api/ocr`, { method: 'POST', body: formData })
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.detail || '识别失败，请检查后端服务是否已启动')
+      }
+      return data
+    },
     async recognizeText() {
-      if (!this.uploadedFile) return
+      if (!this.selectedFiles.length) return
       this.isProcessing = true
       this.errorMsg = ''
-
-      const formData = new FormData()
-      formData.append('file', this.uploadedFile)
+      this.pages = []
+      this.currentPageIndex = 0
+      this.processingLabel = '识别中…'
 
       try {
-        const response = await fetch(`${API_BASE}/api/ocr`, {
-          method: 'POST',
-          body: formData,
-        })
-        const data = await response.json()
-
-        if (!response.ok) {
-          this.errorMsg = data.detail || '识别失败，请检查后端服务是否已启动'
-          return
+        if (this.isPdfMode) {
+          await this.recognizePdf(this.selectedFiles[0])
+        } else {
+          await this.recognizeImages(this.selectedFiles)
         }
-
+      } finally {
+        this.isProcessing = false
+      }
+    },
+    async recognizePdf(file) {
+      try {
+        const data = await this.callOcrApi(file)
         if (data.success) {
-          this.blocks = data.blocks
+          this.pages = data.pages || []
           this.editableText = data.text
           this.$nextTick(this.onImageLoad)
         } else {
           this.errorMsg = data.error || '识别失败'
         }
       } catch (error) {
-        this.errorMsg = '无法连接后端服务，请确认已运行 uvicorn main:app --reload'
-      } finally {
-        this.isProcessing = false
+        this.errorMsg = error.message || '无法连接后端服务，请确认后端已经启动/上线'
       }
+    },
+    async recognizeImages(files) {
+      const allPages = []
+      const textParts = []
+      const multi = files.length > 1
+
+      for (let i = 0; i < files.length; i++) {
+        this.processingLabel = multi ? `识别中…（${i + 1}/${files.length}）` : '识别中…'
+        const file = files[i]
+        try {
+          const data = await this.callOcrApi(file)
+          if (data.success) {
+            const page = data.pages[0]
+            allPages.push({
+              page: i + 1,
+              text: page.text,
+              blocks: page.blocks,
+              image: URL.createObjectURL(file),
+            })
+            textParts.push(multi ? `—— 第${i + 1}张 ——\n${page.text}` : page.text)
+          } else {
+            this.errorMsg = `「${file.name}」：${data.error || '未识别到文字'}`
+          }
+        } catch (error) {
+          this.errorMsg = `「${file.name}」识别失败：${error.message}`
+        }
+      }
+
+      this.pages = allPages
+      this.editableText = textParts.join('\n\n')
+      this.$nextTick(this.onImageLoad)
     },
   },
 }
@@ -294,7 +446,7 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 28px;
+  margin-bottom: 16px;
   flex-wrap: wrap;
 }
 
@@ -340,15 +492,76 @@ body {
   cursor: not-allowed;
 }
 
-.file-name {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--ink-soft);
-}
-
 .error-msg {
   font-size: 13px;
   color: var(--seal);
+}
+
+/* ---------- 已选文件列表 ---------- */
+.file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: var(--paper-light);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 4px 6px 4px 12px;
+}
+
+.chip-remove {
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 50%;
+}
+
+.chip-remove:hover {
+  background: var(--seal-tint);
+  color: var(--seal-dark);
+}
+
+/* ---------- 页码切换 ---------- */
+.page-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.page-tab {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-light);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.page-tab:hover {
+  border-color: var(--seal);
+  color: var(--seal);
+}
+
+.page-tab.active {
+  background: var(--seal);
+  border-color: var(--seal);
+  color: var(--paper-light);
 }
 
 /* ---------- 工作区：左图右文 ---------- */
@@ -428,12 +641,23 @@ body {
   position: relative;
   display: inline-block;
   width: 100%;
+  min-height: 120px;
 }
 
 .source-image {
   width: 100%;
   height: auto;
   display: block;
+  border-radius: 4px;
+}
+
+.pdf-placeholder {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.8;
+  border: 1px dashed var(--line-strong);
   border-radius: 4px;
 }
 
@@ -465,6 +689,7 @@ body {
   flex-wrap: wrap;
   gap: 6px;
   line-height: 1.9;
+  min-height: 24px;
 }
 
 .text-chip {
