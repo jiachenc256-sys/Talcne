@@ -13,6 +13,7 @@ import base64
 import os
 import time
 
+import pymupdf
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -22,6 +23,16 @@ load_dotenv()
 
 BAIDU_API_KEY = os.getenv("BAIDU_API_KEY", "")
 BAIDU_SECRET_KEY = os.getenv("BAIDU_SECRET_KEY", "")
+
+# PDF最多处理的页数：免费版OCR接口是逐页调用的，页数太多会很慢、也容易把免费额度用光，
+# 先用一个保守的上限保护一下，之后有需要可以调大。
+MAX_PDF_PAGES = 10
+
+# 百度OCR接口限制：base64编码后的图片不超过4MB
+MAX_IMAGE_BYTES = 4 * 1024 * 1024
+
+# PDF原始文件大小上限（渲染前），避免超大文件把服务器内存耗尽
+MAX_PDF_BYTES = 20 * 1024 * 1024
 
 app = FastAPI(title="弹词文字识别 MVP")
 
@@ -72,36 +83,22 @@ def get_baidu_access_token() -> str:
     return _token_cache["token"]
 
 
-@app.get("/api/health")
-async def health_check():
-    return {"status": "ok"}
-
-
-@app.post("/api/ocr")
-async def perform_ocr(file: UploadFile = File(...)):
+def ocr_image_bytes(image_bytes: bytes) -> list[dict]:
     """
-    接收一张图片，调用百度「通用文字识别（高精度版）」，
-    返回整体文字，以及每个文字块的位置(location)和识别置信度(confidence)，
-    供前端做「图文对照」和「低置信度标红」使用。
+    把一张图片的原始字节丢给百度「通用文字识别（高精度版）」，
+    返回每个文字块的 text / location / confidence 列表。
+    这是图片识别和PDF逐页识别共用的核心逻辑。
     """
-
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="请上传图片文件")
-
-    image_data = await file.read()
-
-    # 百度OCR接口限制：base64编码后的图片不超过4MB
-    if len(image_data) > 4 * 1024 * 1024:
+    if len(image_bytes) > MAX_IMAGE_BYTES:
         raise HTTPException(status_code=400, detail="图片过大，请上传小于4MB的图片")
 
-    image_base64 = base64.b64encode(image_data).decode("utf-8")
+    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
 
     access_token = get_baidu_access_token()
     ocr_url = (
         "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic"
         f"?access_token={access_token}"
     )
-
     payload = {
         "image": image_base64,
         "detect_direction": "true",   # 自动检测图片方向
@@ -110,7 +107,7 @@ async def perform_ocr(file: UploadFile = File(...)):
     }
 
     try:
-        response = requests.post(ocr_url, data=payload, timeout=15)
+        response = requests.post(ocr_url, data=payload, timeout=20)
         result = response.json()
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"调用百度OCR接口失败: {e}")
@@ -121,12 +118,8 @@ async def perform_ocr(file: UploadFile = File(...)):
             detail=f"百度OCR返回错误: {result.get('error_msg', result)}",
         )
 
-    words_result = result.get("words_result", [])
-    if not words_result:
-        return {"success": False, "error": "未识别到文字，请确认图片清晰且包含文字内容"}
-
     blocks = []
-    for item in words_result:
+    for item in result.get("words_result", []):
         blocks.append(
             {
                 "text": item.get("words", ""),
@@ -134,7 +127,119 @@ async def perform_ocr(file: UploadFile = File(...)):
                 "confidence": item.get("probability", {}).get("average", 1.0),
             }
         )
+    return blocks
 
-    full_text = "\n".join(b["text"] for b in blocks)
 
-    return {"success": True, "text": full_text, "blocks": blocks}
+def render_pdf_page_to_png(doc: "pymupdf.Document", page_index: int, dpi: int = 200) -> bytes:
+    """把PDF的某一页渲染成PNG图片字节，供OCR和前端预览使用"""
+    page = doc.load_page(page_index)
+    zoom = dpi / 72  # PDF默认是72dpi，按目标dpi算缩放倍数
+    pixmap = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+    png_bytes = pixmap.tobytes("png")
+
+    # 如果渲染出来的图超过百度接口的4MB限制，降低dpi重新渲染一次
+    if len(png_bytes) > MAX_IMAGE_BYTES and dpi > 100:
+        return render_pdf_page_to_png(doc, page_index, dpi=150)
+
+    return png_bytes
+
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok"}
+
+
+@app.post("/api/ocr")
+async def perform_ocr(file: UploadFile = File(...)):
+    """
+    接收一张图片或一个PDF文件，调用百度OCR识别文字。
+
+    - 图片：识别一次，返回单页结果
+    - PDF：逐页渲染成图片再分别识别，返回每一页的结果（含该页渲染出的图片，供前端预览用）
+
+    统一的返回结构：
+    {
+      "success": true,
+      "type": "image" | "pdf",
+      "text": "全部页面拼接起来的全文",
+      "pages": [
+        {
+          "page": 1,
+          "text": "这一页的文字",
+          "blocks": [{ "text", "location", "confidence" }, ...],
+          "image": "data:image/png;base64,...."   # 仅PDF会有这个字段，图片模式前端本来就有原图不需要
+        },
+        ...
+      ]
+    }
+    """
+
+    is_pdf = (file.content_type == "application/pdf") or (
+        file.filename and file.filename.lower().endswith(".pdf")
+    )
+    is_image = file.content_type and file.content_type.startswith("image/")
+
+    if not is_pdf and not is_image:
+        raise HTTPException(status_code=400, detail="请上传图片或PDF文件")
+
+    raw_bytes = await file.read()
+
+    if is_image:
+        blocks = ocr_image_bytes(raw_bytes)
+        if not blocks:
+            return {"success": False, "error": "未识别到文字，请确认图片清晰且包含文字内容"}
+        full_text = "\n".join(b["text"] for b in blocks)
+        return {
+            "success": True,
+            "type": "image",
+            "text": full_text,
+            "pages": [{"page": 1, "text": full_text, "blocks": blocks}],
+        }
+
+    # ---- PDF 分支 ----
+    if len(raw_bytes) > MAX_PDF_BYTES:
+        raise HTTPException(status_code=400, detail="PDF文件过大，请上传小于20MB的文件")
+
+    try:
+        doc = pymupdf.open(stream=raw_bytes, filetype="pdf")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"无法打开这个PDF文件: {e}")
+
+    page_count = doc.page_count
+    if page_count == 0:
+        raise HTTPException(status_code=400, detail="这个PDF没有可识别的页面")
+    if page_count > MAX_PDF_PAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"PDF页数过多（{page_count}页），目前MVP阶段最多支持{MAX_PDF_PAGES}页，请拆分后重试",
+        )
+
+    pages = []
+    all_text_parts = []
+    for i in range(page_count):
+        png_bytes = render_pdf_page_to_png(doc, i)
+        blocks = ocr_image_bytes(png_bytes)
+        page_text = "\n".join(b["text"] for b in blocks)
+        image_data_url = "data:image/png;base64," + base64.b64encode(png_bytes).decode("utf-8")
+
+        pages.append(
+            {
+                "page": i + 1,
+                "text": page_text,
+                "blocks": blocks,
+                "image": image_data_url,
+            }
+        )
+        all_text_parts.append(f"—— 第{i + 1}页 ——\n{page_text}")
+
+    doc.close()
+
+    if not any(p["blocks"] for p in pages):
+        return {"success": False, "error": "未识别到文字，请确认PDF清晰且包含文字内容"}
+
+    return {
+        "success": True,
+        "type": "pdf",
+        "text": "\n\n".join(all_text_parts),
+        "pages": pages,
+    }
