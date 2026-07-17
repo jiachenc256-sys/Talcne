@@ -60,6 +60,12 @@
           </span>
         </p>
 
+        <div v-if="blocks.length" class="result-actions">
+          <button class="btn btn-ghost btn-small" @click="toggleSimplified">
+            {{ isSimplified ? '转换为繁体' : '转换为简体' }}
+          </button>
+        </div>
+
         <div v-if="blocks.length" class="text-blocks">
           <span
             v-for="(block, idx) in blocks"
@@ -92,9 +98,15 @@
 </template>
 
 <script>
+import * as OpenCC from 'opencc-js'
+
 // 后端接口地址：本地开发默认指向 FastAPI 的 8000 端口
 // 部署到 Vercel 后，可在项目的环境变量里设置 VITE_API_BASE 指向线上后端地址（如 Render 域名）
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+
+// 繁简转换器：纯前端转换，不需要调用任何后端接口
+const toSimplified = OpenCC.Converter({ from: 't', to: 'cn' })
+const toTraditional = OpenCC.Converter({ from: 'cn', to: 't' })
 
 export default {
   name: 'App',
@@ -107,6 +119,7 @@ export default {
       editableText: '',
       isProcessing: false,
       errorMsg: '',
+      isSimplified: false,
       hoverIndex: null,
       naturalSize: { width: 0, height: 0 },
       displaySize: { width: 0, height: 0 },
@@ -122,6 +135,7 @@ export default {
       this.blocks = []
       this.editableText = ''
       this.errorMsg = ''
+      this.isSimplified = false
     },
     onImageLoad() {
       const img = this.$refs.imgRef
@@ -139,6 +153,14 @@ export default {
         width: (loc.width || 0) * scaleX + 'px',
         height: (loc.height || 0) * scaleY + 'px',
       }
+    },
+    toggleSimplified() {
+      // 用当前显示的文字（可能已经过用户手动校对）做转换，而不是用最初的识别结果，
+      // 这样切换繁简不会覆盖掉用户已经改过的地方
+      const converter = this.isSimplified ? toTraditional : toSimplified
+      this.editableText = converter(this.editableText)
+      this.blocks = this.blocks.map((b) => ({ ...b, text: converter(b.text) }))
+      this.isSimplified = !this.isSimplified
     },
     async recognizeText() {
       if (!this.uploadedFile) return
@@ -369,6 +391,15 @@ body {
 
 .panel-label.secondary {
   margin-top: 20px;
+}
+
+.result-actions {
+  margin-bottom: 12px;
+}
+
+.btn-small {
+  padding: 6px 14px;
+  font-size: 13px;
 }
 
 .hint {
