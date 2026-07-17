@@ -135,6 +135,30 @@
             placeholder="识别结果将出现在这里，你可以直接修改校对…"
             rows="10"
           ></textarea>
+
+          <p class="panel-label secondary">翻译</p>
+          <div class="translate-controls">
+            <select v-model="targetLang" class="lang-select">
+              <option v-for="(label, code) in languageOptions" :key="code" :value="code">
+                {{ label }}
+              </option>
+            </select>
+            <button
+              class="btn btn-ghost btn-small"
+              :disabled="!editableText.trim() || isTranslating"
+              @click="translateText"
+            >
+              {{ isTranslating ? '翻译中…' : `翻译成${languageOptions[targetLang]}` }}
+            </button>
+          </div>
+          <p v-if="translateError" class="error-msg">{{ translateError }}</p>
+          <textarea
+            v-if="translatedText"
+            class="edit-area"
+            :value="translatedText"
+            readonly
+            rows="8"
+          ></textarea>
         </div>
       </div>
     </section>
@@ -179,6 +203,18 @@ export default {
       hoverIndex: null,
       naturalSize: { width: 0, height: 0 },
       displaySize: { width: 0, height: 0 },
+      targetLang: 'en',
+      languageOptions: {
+        en: '英语',
+        jp: '日语',
+        kor: '韩语',
+        fra: '法语',
+        spa: '西班牙语',
+        de: '德语',
+      },
+      translatedText: '',
+      isTranslating: false,
+      translateError: '',
     }
   },
   computed: {
@@ -202,6 +238,8 @@ export default {
       this.editableText = ''
       this.errorMsg = ''
       this.isSimplified = false
+      this.translatedText = ''
+      this.translateError = ''
     },
     handleInitialSelect(event) {
       const files = Array.from(event.target.files || [])
@@ -346,6 +384,28 @@ export default {
       this.pages = allPages
       this.editableText = textParts.join('\n\n')
       this.$nextTick(this.onImageLoad)
+    },
+    async translateText() {
+      if (!this.editableText.trim()) return
+      this.isTranslating = true
+      this.translateError = ''
+      try {
+        const response = await fetch(`${API_BASE}/api/translate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: this.editableText, to: this.targetLang }),
+        })
+        const data = await response.json()
+        if (!response.ok) {
+          this.translateError = data.detail || '翻译失败'
+          return
+        }
+        this.translatedText = data.translated
+      } catch (error) {
+        this.translateError = '无法连接后端服务：' + error.message
+      } finally {
+        this.isTranslating = false
+      }
     },
   },
 }
@@ -613,6 +673,25 @@ body {
 .btn-small {
   padding: 6px 14px;
   font-size: 13px;
+}
+
+.translate-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.lang-select {
+  font-family: var(--font-body);
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-light);
+  color: var(--ink);
 }
 
 .hint {

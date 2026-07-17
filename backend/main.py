@@ -4,13 +4,16 @@
 运行方式：
   1) cd backend
   2) pip install -r requirements.txt
-  3) 复制 .env.example 为 .env，填入你的百度智能云 API Key / Secret Key
+  3) 复制 .env.example 为 .env，填入你的百度智能云 API Key / Secret Key，
+     以及百度翻译开放平台的 APP ID / 密钥（如果要用翻译功能）
   4) uvicorn main:app --reload
      （启动后接口地址为 http://localhost:8000/api/ocr）
 """
 
 import base64
+import hashlib
 import os
+import random
 import time
 
 import pymupdf
@@ -18,11 +21,17 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 load_dotenv()
 
 BAIDU_API_KEY = os.getenv("BAIDU_API_KEY", "")
 BAIDU_SECRET_KEY = os.getenv("BAIDU_SECRET_KEY", "")
+
+# 百度翻译开放平台的Key，跟上面OCR的Key是两套完全不同的东西，
+# 在 https://fanyi-api.baidu.com 单独申请，叫 APP ID / 密钥（不叫API Key/Secret Key）
+BAIDU_TRANSLATE_APP_ID = os.getenv("BAIDU_TRANSLATE_APP_ID", "")
+BAIDU_TRANSLATE_SECRET_KEY = os.getenv("BAIDU_TRANSLATE_SECRET_KEY", "")
 
 # PDF最多处理的页数：免费版OCR接口是逐页调用的，页数太多会很慢、也容易把免费额度用光，
 # 先用一个保守的上限保护一下，之后有需要可以调大。
@@ -33,6 +42,9 @@ MAX_IMAGE_BYTES = 4 * 1024 * 1024
 
 # PDF原始文件大小上限（渲染前），避免超大文件把服务器内存耗尽
 MAX_PDF_BYTES = 20 * 1024 * 1024
+
+# 百度翻译单次请求的文本长度上限（官方要求控制在6000字节以内）
+MAX_TRANSLATE_BYTES = 6000
 
 app = FastAPI(title="弹词文字识别 MVP")
 
@@ -243,3 +255,64 @@ async def perform_ocr(file: UploadFile = File(...)):
         "text": "\n\n".join(all_text_parts),
         "pages": pages,
     }
+
+
+class TranslateRequest(BaseModel):
+    text: str
+    to: str = "en"  # 目标语言代码，比如 en（英语）、jp（日语）、kor（韩语）
+
+
+@app.post("/api/translate")
+async def translate_text(payload: TranslateRequest):
+    """
+    调用百度翻译「通用文本翻译API」，把识别出来的中文翻译成目标语言。
+    这是一套独立于OCR的Key（APP ID + 密钥），需要单独在
+    https://fanyi-api.baidu.com 申请。
+    """
+    if not BAIDU_TRANSLATE_APP_ID or not BAIDU_TRANSLATE_SECRET_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="未配置百度翻译 APP ID / 密钥，请检查后端环境变量 BAIDU_TRANSLATE_APP_ID / BAIDU_TRANSLATE_SECRET_KEY",
+        )
+
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="没有可翻译的文字")
+    if len(text.encode("utf-8")) > MAX_TRANSLATE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="待翻译文字过长（单次最多约2000个汉字），请分段翻译，比如一次翻译一页",
+        )
+
+    # 百度翻译的签名规则：md5(appid + 待翻译文本 + salt + 密钥)
+    salt = str(random.randint(32768, 65536))
+    sign_raw = f"{BAIDU_TRANSLATE_APP_ID}{text}{salt}{BAIDU_TRANSLATE_SECRET_KEY}"
+    sign = hashlib.md5(sign_raw.encode("utf-8")).hexdigest()
+
+    params = {
+        "q": text,
+        "from": "zh",
+        "to": payload.to,
+        "appid": BAIDU_TRANSLATE_APP_ID,
+        "salt": salt,
+        "sign": sign,
+    }
+
+    try:
+        response = requests.post(
+            "https://fanyi-api.baidu.com/api/trans/vip/translate",
+            data=params,
+            timeout=15,
+        )
+        result = response.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"调用百度翻译接口失败: {e}")
+
+    if "error_code" in result:
+        raise HTTPException(
+            status_code=502,
+            detail=f"百度翻译返回错误 {result.get('error_code')}：{result.get('error_msg', '')}",
+        )
+
+    translated = "\n".join(item.get("dst", "") for item in result.get("trans_result", []))
+    return {"success": True, "translated": translated}
