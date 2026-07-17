@@ -29,6 +29,17 @@
       </div>
     </header>
 
+    <div v-if="draftBanner.visible" class="draft-banner">
+      <span class="draft-banner-text">
+        📝 检测到 {{ draftBanner.savedAt }} 保存的未完成校对草稿
+        <template v-if="draftBanner.fileNames.length">（来自：{{ draftBanner.fileNames.join('、') }}）</template>
+      </span>
+      <div class="draft-banner-actions">
+        <button class="btn btn-ghost btn-small" @click="restoreDraft">恢复到编辑框</button>
+        <button class="chip-remove" title="清除草稿" @click="dismissDraft">×</button>
+      </div>
+    </div>
+
     <template v-if="currentView === 'main'">
     <section class="toolbar">
       <label class="btn btn-ghost">
@@ -62,7 +73,7 @@
       </span>
     </div>
 
-    <section v-if="selectedFiles.length" class="workspace-wrap">
+    <section v-if="selectedFiles.length || editableText.trim()" class="workspace-wrap">
       <div v-if="pages.length > 1" class="page-tabs">
         <button
           v-for="(p, idx) in pages"
@@ -96,10 +107,15 @@
                 <br />
                 点击上方「开始识别文字」后，这里会显示每一页的预览
               </template>
-              <template v-else>
+              <template v-else-if="selectedFiles.length">
                 🖼️ 已选择 {{ selectedFiles.length }} 张图片
                 <br />
                 点击上方「开始识别文字」后，这里会依次显示每一张的预览
+              </template>
+              <template v-else>
+                📝 当前显示的是恢复的校对草稿文字，没有对应的原图预览
+                <br />
+                如需核对原图，请重新上传文件
               </template>
             </div>
             <div
@@ -316,7 +332,25 @@ export default {
       translatedText: '',
       isTranslating: false,
       translateError: '',
+      draftBanner: {
+        visible: false,
+        savedAt: '',
+        fileNames: [],
+        text: '',
+      },
+      autosaveTimer: null,
     }
+  },
+  mounted() {
+    this.checkForDraft()
+  },
+  watch: {
+    editableText(newVal) {
+      clearTimeout(this.autosaveTimer)
+      this.autosaveTimer = setTimeout(() => {
+        this.saveDraft(newVal)
+      }, 800)
+    },
   },
   computed: {
     isPdfMode() {
@@ -333,6 +367,57 @@ export default {
     },
   },
   methods: {
+    saveDraft(text) {
+      try {
+        if (!text || !text.trim()) {
+          localStorage.removeItem('tanci-ocr-draft')
+          return
+        }
+        const payload = {
+          text,
+          savedAt: Date.now(),
+          fileNames: this.selectedFiles.map((f) => f.name),
+        }
+        localStorage.setItem('tanci-ocr-draft', JSON.stringify(payload))
+      } catch (e) {
+        // 浏览器本地存储可能满了或者被禁用（比如无痕模式），静默失败即可，不影响正常使用
+        console.warn('自动保存草稿失败：', e)
+      }
+    },
+    checkForDraft() {
+      try {
+        const raw = localStorage.getItem('tanci-ocr-draft')
+        if (!raw) return
+        const draft = JSON.parse(raw)
+        if (!draft.text || !draft.text.trim()) return
+        this.draftBanner = {
+          visible: true,
+          savedAt: this.formatDraftTime(draft.savedAt),
+          fileNames: draft.fileNames || [],
+          text: draft.text,
+        }
+      } catch (e) {
+        console.warn('读取草稿失败：', e)
+      }
+    },
+    formatDraftTime(ts) {
+      if (!ts) return ''
+      const diffMinutes = Math.round((Date.now() - ts) / 60000)
+      if (diffMinutes < 1) return '刚刚'
+      if (diffMinutes < 60) return `${diffMinutes}分钟前`
+      const diffHours = Math.round(diffMinutes / 60)
+      if (diffHours < 24) return `${diffHours}小时前`
+      const diffDays = Math.round(diffHours / 24)
+      return `${diffDays}天前`
+    },
+    restoreDraft() {
+      this.editableText = this.draftBanner.text
+      this.draftBanner.visible = false
+    },
+    dismissDraft() {
+      localStorage.removeItem('tanci-ocr-draft')
+      this.draftBanner.visible = false
+    },
     resetResults() {
       this.pages = []
       this.currentPageIndex = 0
@@ -713,6 +798,31 @@ body {
 .error-msg {
   font-size: 13px;
   color: var(--seal);
+}
+
+/* ---------- 草稿恢复提示条 ---------- */
+.draft-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--seal-tint);
+  border: 1px solid var(--seal);
+  border-radius: 6px;
+  padding: 10px 16px;
+  margin-bottom: 20px;
+}
+
+.draft-banner-text {
+  font-size: 13px;
+  color: var(--seal-dark);
+}
+
+.draft-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* ---------- 已选文件列表 ---------- */
