@@ -19,7 +19,7 @@ import time
 import pymupdf
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -27,6 +27,12 @@ load_dotenv()
 
 BAIDU_API_KEY = os.getenv("BAIDU_API_KEY", "")
 BAIDU_SECRET_KEY = os.getenv("BAIDU_SECRET_KEY", "")
+
+# 共享密钥：只有带上这个口令的请求才会被接受，用来挡住"随手扫到网址就乱调用"的脚本/爬虫。
+# 注意：这不是真正的账号密码保护——前端是纯静态网站，这个值最终会被打包进公开的JS代码里，
+# 懂行的人打开浏览器"检查"面板还是能看到，只是能挡住大部分不会专门逆向这个网站的自动化滥用。
+# 留空（不设置）则不做校验，方便本地开发；部署上线时建议设置成一个随机字符串。
+APP_SHARED_SECRET = os.getenv("APP_SHARED_SECRET", "")
 
 # 百度翻译开放平台的Key，跟上面OCR的Key是两套完全不同的东西，
 # 在 https://fanyi-api.baidu.com 单独申请，叫 APP ID / 密钥（不叫API Key/Secret Key）
@@ -60,6 +66,40 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---- 简单的接口保护：限流 + 共享密钥 ----
+# 目的是防止免费额度（百度OCR每月1000次、百度翻译每月200万字符）被脚本/爬虫刷爆。
+
+# 内存滑动窗口限流：同一个IP在时间窗口内最多允许多少次请求。
+# 注意：这个状态存在内存里，Render免费实例只有一个进程，够用；
+# 如果以后升级成多实例部署，各实例的内存不共享，限流会不准，需要换成Redis等外部存储。
+_RATE_LIMIT_WINDOW_SECONDS = 60
+_RATE_LIMIT_MAX_REQUESTS = 20
+_rate_limit_state: dict[str, list[float]] = {}
+
+
+def _get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def check_rate_limit(request: Request) -> None:
+    ip = _get_client_ip(request)
+    now = time.time()
+    timestamps = _rate_limit_state.setdefault(ip, [])
+    while timestamps and now - timestamps[0] > _RATE_LIMIT_WINDOW_SECONDS:
+        timestamps.pop(0)
+    if len(timestamps) >= _RATE_LIMIT_MAX_REQUESTS:
+        raise HTTPException(status_code=429, detail="请求太频繁了，请稍后再试")
+    timestamps.append(now)
+
+
+def verify_app_secret(x_app_token: str = Header(default="")) -> None:
+    # 没配置密钥就跳过校验，方便本地开发；部署上线建议一定要配置
+    if APP_SHARED_SECRET and x_app_token != APP_SHARED_SECRET:
+        raise HTTPException(status_code=401, detail="未授权的请求")
 
 # access_token 有效期较长（约30天），做一个简单的内存缓存，避免每次识别都重新申请
 _token_cache = {"token": None, "expires_at": 0.0}
@@ -162,7 +202,11 @@ async def health_check():
 
 
 @app.post("/api/ocr")
-async def perform_ocr(file: UploadFile = File(...)):
+async def perform_ocr(
+    file: UploadFile = File(...),
+    _rate_limit: None = Depends(check_rate_limit),
+    _auth: None = Depends(verify_app_secret),
+):
     """
     接收一张图片或一个PDF文件，调用百度OCR识别文字。
 
@@ -263,7 +307,11 @@ class TranslateRequest(BaseModel):
 
 
 @app.post("/api/translate")
-async def translate_text(payload: TranslateRequest):
+async def translate_text(
+    payload: TranslateRequest,
+    _rate_limit: None = Depends(check_rate_limit),
+    _auth: None = Depends(verify_app_secret),
+):
     """
     调用百度翻译「通用文本翻译API」，把识别出来的中文翻译成目标语言。
     这是一套独立于OCR的Key（APP ID + 密钥），需要单独在

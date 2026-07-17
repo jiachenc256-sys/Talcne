@@ -293,6 +293,10 @@ import { Document, Packer, Paragraph, TextRun } from 'docx'
 // 部署到 Vercel 后，可在项目的环境变量里设置 VITE_API_BASE 指向线上后端地址（如 Render 域名）
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
 
+// 接口保护用的共享密钥，要跟后端 APP_SHARED_SECRET 填一样的值。
+// 本地开发不设置也能跑（后端没配密钥时不校验）；部署上线建议在 Vercel 里配置。
+const APP_SECRET = import.meta.env.VITE_APP_SECRET || ''
+
 // 繁简转换器：纯前端转换，不需要调用任何后端接口
 const toSimplified = OpenCC.Converter({ from: 't', to: 'cn' })
 const toTraditional = OpenCC.Converter({ from: 'cn', to: 't' })
@@ -501,7 +505,11 @@ export default {
     async callOcrApi(file) {
       const formData = new FormData()
       formData.append('file', file)
-      const response = await fetch(`${API_BASE}/api/ocr`, { method: 'POST', body: formData })
+      const response = await fetch(`${API_BASE}/api/ocr`, {
+        method: 'POST',
+        headers: APP_SECRET ? { 'X-App-Token': APP_SECRET } : {},
+        body: formData,
+      })
       const data = await response.json()
       if (!response.ok) {
         throw new Error(data.detail || '识别失败，请检查后端服务是否已启动')
@@ -602,7 +610,10 @@ export default {
       try {
         const response = await fetch(`${API_BASE}/api/translate`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(APP_SECRET ? { 'X-App-Token': APP_SECRET } : {}),
+          },
           body: JSON.stringify({ text: this.editableText, to: this.targetLang }),
         })
         const data = await response.json()
