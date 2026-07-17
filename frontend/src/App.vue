@@ -154,6 +154,22 @@
             placeholder="识别结果将出现在这里，你可以直接修改校对…"
             rows="10"
           ></textarea>
+          <div v-if="pages.length" class="export-controls">
+            <button
+              class="btn btn-ghost btn-small"
+              :disabled="!editableText.trim()"
+              @click="exportTxt(editableText, '弹词识别结果')"
+            >
+              导出为 TXT
+            </button>
+            <button
+              class="btn btn-ghost btn-small"
+              :disabled="!editableText.trim()"
+              @click="exportDocx(editableText, '弹词识别结果')"
+            >
+              导出为 Word
+            </button>
+          </div>
 
           <p class="panel-label secondary">翻译</p>
           <div class="translate-controls">
@@ -178,6 +194,11 @@
             readonly
             rows="8"
           ></textarea>
+          <div v-if="translatedText" class="export-controls">
+            <button class="btn btn-ghost btn-small" @click="exportTxt(translatedText, '弹词翻译结果')">
+              导出译文为 TXT
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -250,6 +271,7 @@
 
 <script>
 import * as OpenCC from 'opencc-js'
+import { Document, Packer, Paragraph, TextRun } from 'docx'
 
 // 后端接口地址：本地开发默认指向 FastAPI 的 8000 端口
 // 部署到 Vercel 后，可在项目的环境变量里设置 VITE_API_BASE 指向线上后端地址（如 Render 域名）
@@ -463,6 +485,30 @@ export default {
       this.pages = allPages
       this.editableText = textParts.join('\n\n')
       this.$nextTick(this.onImageLoad)
+    },
+    downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    },
+    exportTxt(text, baseName) {
+      if (!text || !text.trim()) return
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+      this.downloadBlob(blob, `${baseName}.txt`)
+    },
+    async exportDocx(text, baseName) {
+      if (!text || !text.trim()) return
+      const paragraphs = text
+        .split('\n')
+        .map((line) => new Paragraph({ children: [new TextRun(line)] }))
+      const doc = new Document({ sections: [{ children: paragraphs }] })
+      const blob = await Packer.toBlob(doc)
+      this.downloadBlob(blob, `${baseName}.docx`)
     },
     async translateText() {
       if (!this.editableText.trim()) return
@@ -785,6 +831,13 @@ body {
 .btn-small {
   padding: 6px 14px;
   font-size: 13px;
+}
+
+.export-controls {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
 }
 
 .translate-controls {
