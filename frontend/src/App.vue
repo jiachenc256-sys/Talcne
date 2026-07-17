@@ -261,7 +261,62 @@
             <h4>与其他作品的关系</h4>
             <p>{{ work.relations }}</p>
           </div>
+
+          <button class="btn btn-ghost btn-small work-read-btn" @click="openReader(work)">
+            阅读全文 →
+          </button>
         </article>
+      </section>
+    </template>
+
+    <template v-else-if="currentView === 'reader'">
+      <section class="reader-page">
+        <button class="btn btn-ghost btn-small reader-back" @click="currentView = 'resources'">
+          ← 返回资源
+        </button>
+
+        <h2 class="reader-title">{{ readerTitle }}</h2>
+
+        <div v-if="readerLoading" class="reader-status">加载中…</div>
+
+        <div v-else-if="readerError" class="reader-status">
+          📖 这部作品还没有收录全文，欢迎期待更新。
+        </div>
+
+        <div v-else-if="readerData" class="reader-body">
+          <div class="reader-chapter-nav">
+            <button
+              class="btn btn-ghost btn-small"
+              :disabled="readerChapterIndex === 0"
+              @click="readerChapterIndex--"
+            >
+              ← 上一章
+            </button>
+            <select v-model.number="readerChapterIndex" class="lang-select reader-chapter-select">
+              <option v-for="(chapter, idx) in readerData.chapters" :key="idx" :value="idx">
+                {{ chapter.title }}
+              </option>
+            </select>
+            <button
+              class="btn btn-ghost btn-small"
+              :disabled="readerChapterIndex >= readerData.chapters.length - 1"
+              @click="readerChapterIndex++"
+            >
+              下一章 →
+            </button>
+          </div>
+
+          <article class="reader-text">
+            <h3>{{ currentReaderChapter && currentReaderChapter.title }}</h3>
+            <p
+              v-for="(para, idx) in currentReaderParagraphs"
+              :key="idx"
+              class="reader-paragraph"
+            >
+              {{ para }}
+            </p>
+          </article>
+        </div>
       </section>
     </template>
 
@@ -385,6 +440,7 @@ export default {
       autosaveTimer: null,
       classicWorks: [
         {
+          slug: 'zaisheng-yuan',
           title: '《再生缘》',
           meta: '清·陈端生 著（约1751—约1796），梁德绳 续',
           summary:
@@ -397,6 +453,7 @@ export default {
             '常与《天雨花》《笔生花》并称"弹词三大"，三部都出自女性作家之手，主题也都围绕女性突破礼教束缚展开；《笔生花》的作者邱心如在自己书里还专门评论过这部书。',
         },
         {
+          slug: 'tianyu-hua',
           title: '《天雨花》',
           meta: '旧题 明末清初·陶贞怀 著（作者存疑）',
           summary:
@@ -408,6 +465,7 @@ export default {
             '和《再生缘》《笔生花》并称"弹词三大"。跟另外两部不同的是，它更侧重政治历史题材，而不是才子佳人式的爱情故事。',
         },
         {
+          slug: 'yu-qingting',
           title: '《玉蜻蜓》',
           meta: '苏州弹词（评弹）传统书目，作者及成书年代不可考',
           summary:
@@ -420,6 +478,7 @@ export default {
             '和《珍珠塔》《义妖传》一样属于用苏州方言演唱的"土音弹词"（区别于《再生缘》《天雨花》这类用官话写成的"国音弹词"），是苏州评弹的代表书目之一。',
         },
         {
+          slug: 'zhenzhu-ta',
           title: '《珍珠塔》',
           meta: '全称《孝义真迹珍珠塔全传》，作者佚名，清乾隆年间已有刻本',
           summary:
@@ -431,6 +490,7 @@ export default {
           relations: '和《玉蜻蜓》《义妖传》同属苏州方言的土音弹词系统，故事背景相传出自苏州同里的真实人物轶事。',
         },
         {
+          slug: 'bisheng-hua',
           title: '《笔生花》',
           meta: '清·邱心如 著，咸丰七年（1857）首次刊行',
           summary:
@@ -443,6 +503,7 @@ export default {
             '是"弹词三大"里最晚出现的一部，作者与陈端生等前辈作者之间存在明显的对话和呼应关系，某种程度上是一场跨越几十年的女性作家之间的隔空商榷。',
         },
         {
+          slug: 'shuangzhu-feng',
           title: '《双珠凤》',
           meta: '才子佳人题材传统曲艺剧目，有扬州弹词、锡剧等多个地方版本',
           summary:
@@ -453,6 +514,7 @@ export default {
           relations: '跟《珍珠塔》《玉蜻蜓》一样属于才子佳人加家族波折的叙事模式，反映了这类弹词故事在不同方言区之间流传、变形的现象。',
         },
         {
+          slug: 'yiyao-zhuan',
           title: '《义妖传》',
           meta: '苏州弹词，由清代艺人陈遇乾整理定型，题《绣像义妖全传》',
           summary:
@@ -464,6 +526,12 @@ export default {
           relations: '和《玉蜻蜓》《珍珠塔》同属苏州土音弹词系统。',
         },
       ],
+      readerTitle: '',
+      readerSlug: '',
+      readerData: null,
+      readerLoading: false,
+      readerError: false,
+      readerChapterIndex: 0,
     }
   },
   mounted() {
@@ -489,6 +557,15 @@ export default {
       const p = this.pages[this.currentPageIndex]
       if (p) return p.image
       return this.singlePreviewUrl
+    },
+    currentReaderChapter() {
+      if (!this.readerData) return null
+      return this.readerData.chapters[this.readerChapterIndex] || null
+    },
+    currentReaderParagraphs() {
+      const chapter = this.currentReaderChapter
+      if (!chapter || !chapter.text) return []
+      return chapter.text.split('\n').filter((line) => line.trim())
     },
   },
   methods: {
@@ -542,6 +619,26 @@ export default {
     dismissDraft() {
       localStorage.removeItem('tanci-ocr-draft')
       this.draftBanner.visible = false
+    },
+    async openReader(work) {
+      this.currentView = 'reader'
+      this.readerTitle = work.title
+      this.readerSlug = work.slug
+      this.readerData = null
+      this.readerError = false
+      this.readerChapterIndex = 0
+      this.readerLoading = true
+      try {
+        const response = await fetch(`/texts/${work.slug}.json`)
+        if (!response.ok) throw new Error('未找到')
+        const data = await response.json()
+        if (!data.chapters || !data.chapters.length) throw new Error('内容为空')
+        this.readerData = data
+      } catch (e) {
+        this.readerError = true
+      } finally {
+        this.readerLoading = false
+      }
     },
     resetResults() {
       this.pages = []
@@ -1313,6 +1410,71 @@ body {
 .about-note {
   font-size: 12px;
   color: var(--ink-soft);
+}
+
+.work-read-btn {
+  margin-top: 4px;
+}
+
+/* ---------- 阅读器页面 ---------- */
+.reader-page {
+  max-width: 720px;
+}
+
+.reader-back {
+  margin-bottom: 16px;
+}
+
+.reader-title {
+  font-family: var(--font-display);
+  font-size: 22px;
+  margin: 0 0 20px;
+}
+
+.reader-status {
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--ink-soft);
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  background: var(--paper-light);
+}
+
+.reader-chapter-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.reader-chapter-select {
+  flex: 1;
+  min-width: 160px;
+}
+
+.reader-text {
+  background: var(--paper-light);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 28px 32px;
+}
+
+.reader-text h3 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  margin: 0 0 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--line-strong);
+}
+
+.reader-paragraph {
+  font-family: var(--font-display);
+  font-size: 15px;
+  line-height: 2.1;
+  color: var(--ink);
+  margin: 0 0 16px;
+  text-indent: 2em;
 }
 
 /* ---------- 空状态 ---------- */
