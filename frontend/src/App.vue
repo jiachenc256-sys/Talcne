@@ -201,8 +201,15 @@
 
         <div class="about-section">
           <h2>开发者</h2>
-          <p>本项目由 <strong>[你的名字/昵称]</strong> 独立开发和维护。</p>
+          <p>本项目由 <strong>Jiachen Chen (Alice)</strong> 独立开发和维护。</p>
         </div>
+
+        <!--
+          第三方服务/开源库板块按你的要求隐藏了。
+          提醒一下（不是要改你的决定，就留个记录）：这里用到的PyMuPDF是AGPL协议，
+          该协议要求"网络使用也要能获取到源代码"。你的GitHub仓库本身是public的，
+          所以源码依然是可以找到的，只是网站上不再主动放入口了。
+          以后如果想恢复，把下面这段取消注释就行：
 
         <div class="about-section">
           <h2>用到的第三方服务和开源库</h2>
@@ -219,6 +226,7 @@
             <a href="https://github.com/jiachenc256-sys/Talcne" target="_blank" rel="noopener">GitHub源码仓库</a>。
           </p>
         </div>
+        -->
 
         <div class="about-section">
           <h2>隐私说明</h2>
@@ -231,8 +239,8 @@
         <div class="about-section">
           <h2>版权</h2>
           <p class="about-note">
-            © 2026 弹词文字识别助手。除上方列出的第三方服务和开源库外，本项目代码保留所有权利
-            （All rights reserved），未经许可不得复制、修改或用于其他用途。
+            © 2026 弹词文字识别助手。本项目代码保留所有权利（All rights reserved），
+            未经许可不得复制、修改或用于其他用途；项目中使用的第三方服务和开源库各自遵循其自身条款。
           </p>
         </div>
       </section>
